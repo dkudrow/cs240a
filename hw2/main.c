@@ -12,6 +12,10 @@
 #include <stdlib.h>
 #include <math.h>
 
+// these should be accessible everywhere
+int rank;
+int size;
+
 double* load_vec( char* filename, int* k );
 void save_vec( int k, double* x );
 
@@ -26,9 +30,24 @@ void print_vec(double *vec, int n)
 double ddot(double* v_vec, double *w_vec, int n)
 {
 	int i;
+	double sendbuf[1];
+	double *recvbuf = malloc(size * sizeof(double));
 	double ret = 0;
+
+	// compute partial sum
 	for (i=0; i<n; i++)
-		ret += v_vec[i] * w_vec[i];
+		sendbuf[0] += v_vec[i] * w_vec[i];
+
+	// broadcast and receive other partial sums
+	MPI_Allgather(sendbuf, 1, MPI_DOUBLE, recvbuf, 1, MPI_DOUBLE, MPI_COMM_WORLD);
+	MPI_Barrier(MPI_COMM_WORLD);
+
+	// aggregate partial sums
+	for (i=0; i<size; i++)
+		ret += recvbuf[i];
+
+	// cleanup
+	free(recvbuf);
 	return ret;
 }
 
@@ -60,9 +79,19 @@ void matvec(double *A_vec, double *d_vec, int k)
 
 double *cgsolve(int k)
 {
-	int i;
+	int i, first_i, last_i;
 	int n = k * k;
 	int maxiters = 1000 > 5*k ? 1000 : k;
+
+	// partition data
+	if (n % size) {
+		first_i = (n / size + 1) * rank;
+		last_i = (rank != size-1 ? first_i+n/size+1 : n);
+	} else {
+		first_i = n / size * rank;
+		last_i = n / size * (rank + 1);
+	}
+	printf("Process %i first_i=%i, last_i=%i\n", rank, first_i, last_i);
 
 	double *b_vec = malloc(n * sizeof(double));
 	double *r_vec = malloc(n * sizeof(double));
@@ -78,19 +107,19 @@ double *cgsolve(int k)
 		x_vec[i] = 0;
 	}
 
-	double normb = sqrt(ddot(b_vec, b_vec, n));
-	double rtr = ddot(r_vec, r_vec, n);
+	double normb = sqrt(ddot(b_vec+first_i, b_vec+first_i, last_i-first_i));
+	double rtr = ddot(r_vec+first_i, r_vec+first_i, last_i-first_i);
 	double relres = 1;
 
 	i = 0;
 	while (relres > 1e-6 && i++ < maxiters) {
 
 		matvec(A_vec, d_vec, k);
-		double alpha = rtr / ddot(d_vec, A_vec, n);
+		double alpha = rtr / ddot(d_vec+first_i, A_vec+first_i, last_i-first_i);
 		daxpy(x_vec, d_vec, 1, alpha, n);
 		daxpy(r_vec, A_vec, 1, -1*alpha, n);
 		double rtrold = rtr;
-		rtr = ddot(r_vec, r_vec, n);
+		rtr = ddot(r_vec+first_i, r_vec+first_i, last_i-first_i);
 		double beta = rtr / rtrold;
 		daxpy(d_vec, r_vec, beta, 1, n);
 		relres = sqrt(rtr) / normb;
@@ -111,6 +140,8 @@ int main( int argc, char* argv[] ) {
 	double t1, t2;
 	
 	MPI_Init( &argc, &argv );
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	
 	// Read command line args.
 	// 1st case runs model problem, 2nd Case allows you to specify your own b vector
