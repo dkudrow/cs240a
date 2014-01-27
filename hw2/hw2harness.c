@@ -62,7 +62,7 @@ int cs240_verify(double* x, int k, double elapsedTime) {
 			
 		if (diff > 0.01) {
 			// /
-			printf("x[%i] = %f, expected %f\n!", i, x[i], expected);
+			printf("x[%i] = %f, expected %f!\n", i, x[i], expected);
 			correct = 0;
 			break;
 		}

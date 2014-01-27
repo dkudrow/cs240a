@@ -30,16 +30,17 @@ void print_vec(double *vec, int n)
 double ddot(double* v_vec, double *w_vec, int n)
 {
 	int i;
-	double sendbuf[1];
-	double *recvbuf = malloc(size * sizeof(double));
+	double sendbuf = 0;
 	double ret = 0;
+	double *recvbuf = (double *)malloc(size * sizeof(double));
 
 	// compute partial sum
 	for (i=0; i<n; i++)
-		sendbuf[0] += v_vec[i] * w_vec[i];
+		sendbuf += v_vec[i] * w_vec[i];
 
 	// broadcast and receive other partial sums
-	MPI_Allgather(sendbuf, 1, MPI_DOUBLE, recvbuf, 1, MPI_DOUBLE, MPI_COMM_WORLD);
+	MPI_Barrier(MPI_COMM_WORLD);
+	MPI_Allgather(&sendbuf, 1, MPI_DOUBLE, recvbuf, 1, MPI_DOUBLE, MPI_COMM_WORLD);
 	MPI_Barrier(MPI_COMM_WORLD);
 
 	// aggregate partial sums
@@ -91,13 +92,12 @@ double *cgsolve(int k)
 		first_i = n / size * rank;
 		last_i = n / size * (rank + 1);
 	}
-	printf("Process %i first_i=%i, last_i=%i\n", rank, first_i, last_i);
 
-	double *b_vec = malloc(n * sizeof(double));
-	double *r_vec = malloc(n * sizeof(double));
-	double *d_vec = malloc(n * sizeof(double));
-	double *A_vec = malloc(n * sizeof(double));
-	double *x_vec = malloc(n * sizeof(double));
+	double *b_vec = (double *)malloc(n * sizeof(double));
+	double *r_vec = (double *)malloc(n * sizeof(double));
+	double *d_vec = (double *)malloc(n * sizeof(double));
+	double *A_vec = (double *)malloc(n * sizeof(double));
+	double *x_vec = (double *)malloc(n * sizeof(double));
 
 	for (i=0; i<n; i++) {
 		double tmp = cs240_getB(i, n);
@@ -107,12 +107,14 @@ double *cgsolve(int k)
 		x_vec[i] = 0;
 	}
 
+
 	double normb = sqrt(ddot(b_vec+first_i, b_vec+first_i, last_i-first_i));
 	double rtr = ddot(r_vec+first_i, r_vec+first_i, last_i-first_i);
 	double relres = 1;
 
 	i = 0;
 	while (relres > 1e-6 && i++ < maxiters) {
+	/*while (i++ < 1) {*/
 
 		matvec(A_vec, d_vec, k);
 		double alpha = rtr / ddot(d_vec+first_i, A_vec+first_i, last_i-first_i);
