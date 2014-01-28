@@ -1,12 +1,11 @@
 /* UCSB CS240A, Winter Quarter 2014
  * Main and supporting functions for the Conjugate Gradient Solver on a 5-point stencil
  *
- * NAMES:
- * PERMS:
- * DATE:
+ * NAMES: Daniel Kudrow, Victor, Joachim
+ * PERMS: 8666141      , 
+ * DATE: 2014-01-28
  */
-/*#include "mpi.h"*/
-//#include <mpi/mpi.h>
+
 #include "mpi.h"
 #include "hw2harness.h"
 #include <stdio.h>
@@ -17,57 +16,67 @@
 int rank;
 int size;
 
-// matvec 
+// we don't really need these
+double* load_vec( char* filename, int* k );
+void save_vec( int k, double* x );
+
+// 
+// matvec
+//
+// performs 'v = A * w' where
+// A is an n x n matrix
+// v and w are n-dimensional vectors
+//
 void matvec(double *v ,double *w, int k)
 {
-	int starting_index;
+	int i, r, s;
+	int start_i = rank ? k : 0;
 	int rows_in_chunk = k / size;
+	int node_elements_size = rows_in_chunk * k;
 	double *extended_w;
 
-	if (rank == 0 || rank == size-1) {
+	// allocate space for neighboring elements
+	if (rank == 0 || rank == size-1)
 		extended_w = malloc((k*k/size+k) * sizeof(double));
-	} else {
+	else
 		extended_w = malloc((k*k/size+2*k) * sizeof(double));
-	}
 
+	// exchange elements with neighbors
 	communicate_neighbor(extended_w, w, k);
-	int node_elements_size = rows_in_chunk * k;
-	if (rank == 0) {
-		starting_index = 0;
-	} else {
-		starting_index = k;
-	}
 
-	int i = starting_index;
-	int r, s;
-	for (; i<starting_index+node_elements_size; i++)
-	{
-		r = rank * rows_in_chunk + (i-starting_index) / k;
+	// matvec logic
+	for (i = start_i; i<start_i+node_elements_size; i++) {
+		r = rank * rows_in_chunk + (i-start_i) / k;
 		s = i % k;
-		v[i-starting_index] = 4 * extended_w[i];
-		if (r != 0) {
-			v[i-starting_index] -= extended_w[i-k];
-		}
-		if (s != 0) {
-			v[i-starting_index] -= extended_w[i-1];
-		}
-		if (s != k-1) {
-			v[i-starting_index] -= extended_w[i+1];
-		}
-		if (r != k-1) {
-			v[i-starting_index] -= extended_w[i+k];
-		}
+		v[i-start_i] = 4 * extended_w[i];
+		if (r != 0)
+			v[i-start_i] -= extended_w[i-k];
+		if (s != 0)
+			v[i-start_i] -= extended_w[i-1];
+		if (s != k-1)
+			v[i-start_i] -= extended_w[i+1];
+		if (r != k-1)
+			v[i-start_i] -= extended_w[i+k];
 	}
 
+	// cleanup
 	free(extended_w);
 	return v;
 } 
 
+//
+// communicate_neighbor
+//
+// exchanges neighboring rows with the processors that own them
+//
 void communicate_neighbor(double * portion, double * v_part, int k)
 {
+	int i;
+	int start_i = rank ? k : 0;
 	int rows_in_chunk = (k) / size;
-	
 	MPI_Status status;
+
+	// exchange relevent elments with neighbors
 	if (rank == 0) {
 		MPI_Send(&v_part[(rows_in_chunk-1)*k] , k , MPI_DOUBLE, rank+1, rank+1/*tag*/, MPI_COMM_WORLD);
 		MPI_Recv(&portion[rows_in_chunk*k], k, MPI_DOUBLE, rank+1, rank, MPI_COMM_WORLD,&status);
@@ -81,21 +90,15 @@ void communicate_neighbor(double * portion, double * v_part, int k)
 		MPI_Recv(&portion[0], k, MPI_DOUBLE, rank-1, rank, MPI_COMM_WORLD,&status);
 	}
 
-	int starting_index;
- 	if (rank == 0) {
- 		starting_index = 0;
- 	} else {
- 		starting_index = k;
- 	}
- 	int i; 
-	for (i=starting_index; i<starting_index+(k*k/size); i++) {
-		portion[i] = v_part[i-starting_index];
-	}
+	for (i=start_i; i<start_i+(k*k/size); i++)
+		portion[i] = v_part[i-start_i];
 }
 
-double* load_vec( char* filename, int* k );
-void save_vec( int k, double* x );
-
+//
+// print_vec
+//
+// print a vector to stdout
+//
 void print_vec(double *vec, int n)
 {
 	int i;
@@ -104,6 +107,11 @@ void print_vec(double *vec, int n)
 	printf("\n");
 }
 
+// 
+// ddot
+//
+// returns the scalar dot product of n-dimensional vectors v_vec and w_vec
+//
 double ddot(double* v_vec, double *w_vec, int n)
 {
 	int i;
@@ -129,6 +137,13 @@ double ddot(double* v_vec, double *w_vec, int n)
 	return ret;
 }
 
+// 
+// daxpy
+//
+// compute 'v = a*v + b*w' where
+// a and b are scalars
+// v and w are n-dimensional vectors
+//
 void daxpy(double *v_vec, double *w_vec, double a, double b, int n)
 {
 	int i;
@@ -136,32 +151,18 @@ void daxpy(double *v_vec, double *w_vec, double a, double b, int n)
 		v_vec[i] = a * v_vec[i] + b * w_vec[i];
 }
 
-void old_matvec(double *Ad_vec, double *d_vec, int k)
-{
-	int r, s;
-	for (r=0; r<k; r++) {
-		for (s=0; s<k; s++) {
-			int i = r * k + s;
-			Ad_vec[i] = 4 * d_vec[i];
-			if (r != 0)
-				Ad_vec[i] -= d_vec[i-k];
-			if (s != 0)
-				Ad_vec[i] -= d_vec[i-1];
-			if (s != k-1)
-				Ad_vec[i] -= d_vec[i+1];
-			if (r != k-1)
-				Ad_vec[i] -= d_vec[i+k];
-		}
-	}
-}
-
+//
+// cgsolve
+//
+// CG solution to Poisson's Equation
+//
 double *cgsolve(int k)
 {
 	int i, first_i, last_i, part_size;
 	int n = k * k;
 	int maxiters = 1000 > 5*k ? 1000 : k;
 
-	// partition data
+	// partition the indices of b
 	if (n % size) {
 		first_i = (n / size + 1) * rank;
 		last_i = (rank != size-1 ? first_i+n/size+1 : n);
@@ -172,12 +173,14 @@ double *cgsolve(int k)
 
 	part_size = last_i - first_i;
 
+	// allocate space for all vectors
 	double *b_vec = (double *)malloc(part_size * sizeof(double));
 	double *r_vec = (double *)malloc(part_size * sizeof(double));
 	double *d_vec = (double *)malloc(part_size * sizeof(double));
 	double *Ad_vec = (double *)malloc(part_size * sizeof(double));
 	double *x_vec = (double *)malloc(part_size * sizeof(double));
 
+	// fill the vectors with cs240_getB()
 	for (i=0; i<part_size; i++) {
 		double tmp = cs240_getB(first_i+i, n);
 		b_vec[i] = tmp;
@@ -186,10 +189,12 @@ double *cgsolve(int k)
 		x_vec[i] = 0;
 	}
 
+	// initialize looping conditions
 	double normb = sqrt(ddot(b_vec, b_vec, part_size));
 	double rtr = ddot(r_vec, r_vec, part_size);
 	double relres = 1;
 
+	// main loop
 	i = 0;
 	while (relres > 1e-6 && i++ < maxiters) {
 		matvec(Ad_vec, d_vec, k);
@@ -203,6 +208,7 @@ double *cgsolve(int k)
 		relres = sqrt(rtr) / normb;
 	}
 
+	// aggregate results in rank 0
 	if (rank != 0) {
 		MPI_Gather(x_vec, part_size, MPI_DOUBLE, NULL, part_size, MPI_DOUBLE,
 				0, MPI_COMM_WORLD);
