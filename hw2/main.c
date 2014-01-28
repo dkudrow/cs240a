@@ -117,24 +117,30 @@ double ddot(double* v_vec, double *w_vec, int n)
 	int i;
 	double sendbuf = 0;
 	double ret = 0;
-	double *recvbuf = (double *)malloc(size * sizeof(double));
 
 	// compute partial sum
 	for (i=0; i<n; i++)
 		sendbuf += v_vec[i] * w_vec[i];
 
-	// broadcast and receive other partial sums
-	MPI_Barrier(MPI_COMM_WORLD);
-	MPI_Allgather(&sendbuf, 1, MPI_DOUBLE, recvbuf, 1, MPI_DOUBLE, MPI_COMM_WORLD);
-	MPI_Barrier(MPI_COMM_WORLD);
+	// reduce results at root and broadcats to other nodes
+	if (rank != 0) {
+		MPI_Gather(&sendbuf, 1, MPI_DOUBLE, NULL, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&ret, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-	// aggregate partial sums
-	for (i=0; i<size; i++)
-		ret += recvbuf[i];
+		return ret;
+	} else {
+		double *recvbuf = (double *)malloc(size * sizeof(double));
 
-	// cleanup
-	free(recvbuf);
-	return ret;
+		MPI_Gather(&sendbuf, 1, MPI_DOUBLE, recvbuf, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+		for (i=0; i<size; i++)
+			ret += recvbuf[i];
+
+		MPI_Bcast(&ret, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+		free(recvbuf);
+		return ret;
+	}
 }
 
 // 
