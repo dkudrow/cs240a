@@ -1,0 +1,5 @@
+# the trash heap
+**/discard/
+
+# object files
+*.o

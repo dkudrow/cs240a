@@ -6,7 +6,8 @@
  * DATE:
  */
 /*#include "mpi.h"*/
-#include <mpi/mpi.h>
+//#include <mpi/mpi.h>
+#include "mpi.h"
 #include "hw2harness.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,82 @@
 // these should be accessible everywhere
 int rank;
 int size;
+
+// matvec 
+void matvec(double *v ,double *w, int k)
+{
+	int starting_index;
+	int rows_in_chunk = k / size;
+	double *extended_w;
+
+	if (rank == 0 || rank == size-1) {
+		extended_w = malloc((k*k/size+k) * sizeof(double));
+	} else {
+		extended_w = malloc((k*k/size+2*k) * sizeof(double));
+	}
+
+	communicate_neighbor(extended_w, w, k);
+	int node_elements_size = rows_in_chunk * k;
+	if (rank == 0) {
+		starting_index = 0;
+	} else {
+		starting_index = k;
+	}
+
+	int i = starting_index;
+	int r, s;
+	for (; i<starting_index+node_elements_size; i++)
+	{
+		r = rank * rows_in_chunk + (i-starting_index) / k;
+		s = i % k;
+		v[i-starting_index] = 4 * extended_w[i];
+		if (r != 0) {
+			v[i-starting_index] -= extended_w[i-k];
+		}
+		if (s != 0) {
+			v[i-starting_index] -= extended_w[i-1];
+		}
+		if (s != k-1) {
+			v[i-starting_index] -= extended_w[i+1];
+		}
+		if (r != k-1) {
+			v[i-starting_index] -= extended_w[i+k];
+		}
+	}
+
+	free(extended_w);
+	return v;
+} 
+
+void communicate_neighbor(double * portion, double * v_part, int k)
+{
+	int rows_in_chunk = (k) / size;
+	
+	MPI_Status status;
+	if (rank == 0) {
+		MPI_Send(&v_part[(rows_in_chunk-1)*k] , k , MPI_DOUBLE, rank+1, rank+1/*tag*/, MPI_COMM_WORLD);
+		MPI_Recv(&portion[rows_in_chunk*k], k, MPI_DOUBLE, rank+1, rank, MPI_COMM_WORLD,&status);
+	} else if (rank < size -1) {
+		MPI_Send(&v_part[0] , k , MPI_DOUBLE, rank-1, rank-1/*tag*/, MPI_COMM_WORLD);
+		MPI_Send(&v_part[(rows_in_chunk-1)*k] , k , MPI_DOUBLE, rank+1, rank+1/*tag*/, MPI_COMM_WORLD);
+		MPI_Recv(&portion[0], k, MPI_DOUBLE, rank-1, rank, MPI_COMM_WORLD,&status);
+		MPI_Recv(&portion[(rows_in_chunk+1)*k], k, MPI_DOUBLE, rank+1, rank, MPI_COMM_WORLD,&status);
+	} else {
+		MPI_Send(&v_part[0] , k , MPI_DOUBLE, rank-1, rank-1/*tag*/, MPI_COMM_WORLD);
+		MPI_Recv(&portion[0], k, MPI_DOUBLE, rank-1, rank, MPI_COMM_WORLD,&status);
+	}
+
+	int starting_index;
+ 	if (rank == 0) {
+ 		starting_index = 0;
+ 	} else {
+ 		starting_index = k;
+ 	}
+ 	int i; 
+	for (i=starting_index; i<starting_index+(k*k/size); i++) {
+		portion[i] = v_part[i-starting_index];
+	}
+}
 
 double* load_vec( char* filename, int* k );
 void save_vec( int k, double* x );
@@ -59,28 +136,28 @@ void daxpy(double *v_vec, double *w_vec, double a, double b, int n)
 		v_vec[i] = a * v_vec[i] + b * w_vec[i];
 }
 
-void matvec(double *A_vec, double *d_vec, int k)
+void old_matvec(double *Ad_vec, double *d_vec, int k)
 {
 	int r, s;
 	for (r=0; r<k; r++) {
 		for (s=0; s<k; s++) {
 			int i = r * k + s;
-			A_vec[i] = 4 * d_vec[i];
+			Ad_vec[i] = 4 * d_vec[i];
 			if (r != 0)
-				A_vec[i] -= d_vec[i-k];
+				Ad_vec[i] -= d_vec[i-k];
 			if (s != 0)
-				A_vec[i] -= d_vec[i-1];
+				Ad_vec[i] -= d_vec[i-1];
 			if (s != k-1)
-				A_vec[i] -= d_vec[i+1];
+				Ad_vec[i] -= d_vec[i+1];
 			if (r != k-1)
-				A_vec[i] -= d_vec[i+k];
+				Ad_vec[i] -= d_vec[i+k];
 		}
 	}
 }
 
 double *cgsolve(int k)
 {
-	int i, first_i, last_i;
+	int i, first_i, last_i, part_size;
 	int n = k * k;
 	int maxiters = 1000 > 5*k ? 1000 : k;
 
@@ -93,42 +170,50 @@ double *cgsolve(int k)
 		last_i = n / size * (rank + 1);
 	}
 
-	double *b_vec = (double *)malloc(n * sizeof(double));
-	double *r_vec = (double *)malloc(n * sizeof(double));
-	double *d_vec = (double *)malloc(n * sizeof(double));
-	double *A_vec = (double *)malloc(n * sizeof(double));
-	double *x_vec = (double *)malloc(n * sizeof(double));
+	part_size = last_i - first_i;
 
-	for (i=0; i<n; i++) {
-		double tmp = cs240_getB(i, n);
+	double *b_vec = (double *)malloc(part_size * sizeof(double));
+	double *r_vec = (double *)malloc(part_size * sizeof(double));
+	double *d_vec = (double *)malloc(part_size * sizeof(double));
+	double *Ad_vec = (double *)malloc(part_size * sizeof(double));
+	double *x_vec = (double *)malloc(part_size * sizeof(double));
+
+	for (i=0; i<part_size; i++) {
+		double tmp = cs240_getB(first_i+i, n);
 		b_vec[i] = tmp;
 		r_vec[i] = tmp;
 		d_vec[i] = tmp;
 		x_vec[i] = 0;
 	}
 
-
-	double normb = sqrt(ddot(b_vec+first_i, b_vec+first_i, last_i-first_i));
-	double rtr = ddot(r_vec+first_i, r_vec+first_i, last_i-first_i);
+	double normb = sqrt(ddot(b_vec, b_vec, part_size));
+	double rtr = ddot(r_vec, r_vec, part_size);
 	double relres = 1;
 
 	i = 0;
 	while (relres > 1e-6 && i++ < maxiters) {
-	/*while (i++ < 1) {*/
-
-		matvec(A_vec, d_vec, k);
-		double alpha = rtr / ddot(d_vec+first_i, A_vec+first_i, last_i-first_i);
-		daxpy(x_vec, d_vec, 1, alpha, n);
-		daxpy(r_vec, A_vec, 1, -1*alpha, n);
+		matvec(Ad_vec, d_vec, k);
+		double alpha = rtr / ddot(d_vec, Ad_vec, part_size);
+		daxpy(x_vec, d_vec, 1, alpha, part_size);
+		daxpy(r_vec, Ad_vec, 1, -1*alpha, part_size);
 		double rtrold = rtr;
-		rtr = ddot(r_vec+first_i, r_vec+first_i, last_i-first_i);
+		rtr = ddot(r_vec, r_vec, part_size);
 		double beta = rtr / rtrold;
-		daxpy(d_vec, r_vec, beta, 1, n);
+		daxpy(d_vec, r_vec, beta, 1, part_size);
 		relres = sqrt(rtr) / normb;
 	}
-	return x_vec;
-}
 
+	if (rank != 0) {
+		MPI_Gather(x_vec, part_size, MPI_DOUBLE, NULL, part_size, MPI_DOUBLE,
+				0, MPI_COMM_WORLD);
+		return NULL;
+	} else {
+		double *results_buf = malloc(n * sizeof(double));
+		MPI_Gather(x_vec, part_size, MPI_DOUBLE, results_buf, part_size,
+				MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		return results_buf;
+	}
+}
 
 int main( int argc, char* argv[] ) {
 	int writeOutX = 0;
@@ -170,7 +255,9 @@ int main( int argc, char* argv[] ) {
  	// End Timer
 	t2 = MPI_Wtime();
 	
-	printf("TEST: %s\n", cs240_verify(x, k, 0.0) ? "PASSED" : "FAILED");
+	if (rank == 0) {
+		printf("TEST: %s\n", cs240_verify(x, k, 0.0) ? "PASSED" : "FAILED");
+	}
 
 	if ( writeOutX ) {
 		save_vec( k, x );
@@ -178,16 +265,16 @@ int main( int argc, char* argv[] ) {
 		
 	// Output
 	printf( "Problem size (k): %d\n",k);
-	if(niters>0){
+	if (niters>0){
           printf( "Norm of the residual after %d iterations: %lf\n",niters,norm);
         }
 	printf( "Elapsed time during CGSOLVE: %lf\n", t2-t1);
 	
         // Deallocate 
-        if(niters > 0){
+        if (niters > 0){
 	  free(b);
 	}
-        if(niters > 0){
+        if (niters > 0){
           free(x);
 	}
 	
